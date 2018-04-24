@@ -16,6 +16,8 @@
 import { assert, expect } from 'chai';
 import * as sinon from 'sinon';
 
+import { FirebaseApp } from '@firebase/app-types';
+
 import { ControllerInterface } from '../src/controllers/controller-interface';
 import { SWController } from '../src/controllers/sw-controller';
 import { WindowController } from '../src/controllers/window-controller';
@@ -31,84 +33,27 @@ import { VapidDetailsModel } from '../src/models/vapid-details-model';
 import { makeFakeApp } from './testing-utils/make-fake-app';
 import { makeFakeSubscription } from './testing-utils/make-fake-subscription';
 import { makeFakeSWReg } from './testing-utils/make-fake-sw-reg';
+import { describe } from './testing-utils/messaging-test-runner';
 
 const ONE_DAY = 24 * 60 * 60 * 1000;
 
+interface VapidSetup {
+  name: string;
+  details: TokenDetails;
+}
+
+type ControllerImpl = typeof WindowController | typeof SWController;
+
 describe('Firebase Messaging > *Controller.getToken()', () => {
-  const sandbox = sinon.sandbox.create();
-  const now = Date.now();
-  const expiredDate = now - ONE_DAY * 8; // 8 days ago
-  const FAKE_SUBSCRIPTION = makeFakeSubscription();
-
-  const EXAMPLE_FCM_TOKEN = 'ExampleFCMToken1337';
-  const EXAMPLE_SENDER_ID = '1234567890';
-  const CUSTOM_VAPID_KEY = base64ToArrayBuffer(
-    'BDd3_hVL9fZi9Ybo2UUzA284WG5FZR30_95YeZJsiApwXK' +
-      'pNcF1rRPF3foIiBHXRdJI2Qhumhf6_LFTeZaNndIo'
-  );
-  const ENDPOINT = FAKE_SUBSCRIPTION.endpoint;
-  const AUTH = FAKE_SUBSCRIPTION.getKey('auth')!;
-  const P256DH = FAKE_SUBSCRIPTION.getKey('p256dh')!;
-
-  const EXAMPLE_TOKEN_DETAILS_DEFAULT_VAPID: TokenDetails = {
-    swScope: '/example-scope',
-    vapidKey: DEFAULT_PUBLIC_VAPID_KEY,
-    endpoint: ENDPOINT,
-    auth: AUTH,
-    p256dh: P256DH,
-    fcmSenderId: EXAMPLE_SENDER_ID,
-    fcmToken: 'qwerty1',
-    fcmPushSet: '87654321',
-    createTime: now
-  };
-  const EXAMPLE_TOKEN_DETAILS_CUSTOM_VAPID: TokenDetails = {
-    swScope: '/example-scope',
-    vapidKey: CUSTOM_VAPID_KEY,
-    endpoint: ENDPOINT,
-    auth: AUTH,
-    p256dh: P256DH,
-    fcmSenderId: EXAMPLE_SENDER_ID,
-    fcmToken: 'qwerty2',
-    fcmPushSet: '7654321',
-    createTime: now
-  };
-  const EXAMPLE_EXPIRED_TOKEN_DETAILS: TokenDetails = {
-    swScope: '/example-scope',
-    vapidKey: DEFAULT_PUBLIC_VAPID_KEY,
-    endpoint: ENDPOINT,
-    auth: AUTH,
-    p256dh: P256DH,
-    fcmSenderId: EXAMPLE_SENDER_ID,
-    fcmToken: 'qwerty3',
-    fcmPushSet: '654321',
-    createTime: expiredDate
-  };
-
-  const customVAPIDSetup = {
-    name: 'custom',
-    details: EXAMPLE_TOKEN_DETAILS_CUSTOM_VAPID
-  };
-  const defaultVAPIDSetup = {
-    name: 'default',
-    details: EXAMPLE_TOKEN_DETAILS_DEFAULT_VAPID
-  };
-
-  const app = makeFakeApp({
-    messagingSenderId: EXAMPLE_SENDER_ID
-  });
-
-  const servicesToTest = [WindowController, SWController];
-  const vapidSetupToTest = [defaultVAPIDSetup, customVAPIDSetup];
-
-  const mockGetReg = (fakeReg: Promise<ServiceWorkerRegistration>) => {
+  function mockGetReg(fakeReg: Promise<ServiceWorkerRegistration>): void {
     servicesToTest.forEach(serviceClass => {
       sandbox
         .stub(serviceClass.prototype, 'getSWRegistration_')
         .callsFake(() => fakeReg);
     });
-  };
+  }
 
-  const generateFakeReg = () => {
+  function generateFakeReg(): Promise<ServiceWorkerRegistration> {
     const registration = makeFakeSWReg();
     Object.defineProperty(registration, 'pushManager', {
       value: {
@@ -116,18 +61,101 @@ describe('Firebase Messaging > *Controller.getToken()', () => {
       }
     });
     return Promise.resolve(registration);
-  };
+  }
 
-  const cleanUp = () => {
-    sandbox.restore();
-  };
+  let sandbox: sinon.SinonSandbox;
+
+  let now: number;
+  let expiredDate: number;
+
+  let EXAMPLE_FCM_TOKEN: string;
+  let EXAMPLE_SENDER_ID: string;
+  let CUSTOM_VAPID_KEY: Uint8Array;
+  let ENDPOINT: string;
+  let AUTH: ArrayBuffer;
+  let P256DH: ArrayBuffer;
+
+  let EXAMPLE_TOKEN_DETAILS_DEFAULT_VAPID: TokenDetails;
+  let EXAMPLE_TOKEN_DETAILS_CUSTOM_VAPID: TokenDetails;
+  let EXAMPLE_EXPIRED_TOKEN_DETAILS: TokenDetails;
+
+  let app: FirebaseApp;
+
+  let servicesToTest: ControllerImpl[] = [];
+  let vapidSetupToTest: VapidSetup[] = [];
 
   beforeEach(() => {
-    return cleanUp();
+    now = Date.now();
+    expiredDate = now - ONE_DAY * 8; // 8 days ago
+
+    sandbox = sinon.sandbox.create();
+    sandbox.useFakeTimers(now);
+
+    const FAKE_SUBSCRIPTION = makeFakeSubscription();
+
+    EXAMPLE_FCM_TOKEN = 'ExampleFCMToken1337';
+    EXAMPLE_SENDER_ID = '1234567890';
+    CUSTOM_VAPID_KEY = base64ToArrayBuffer(
+      'BDd3_hVL9fZi9Ybo2UUzA284WG5FZR30_95YeZJsiApwXK' +
+        'pNcF1rRPF3foIiBHXRdJI2Qhumhf6_LFTeZaNndIo'
+    );
+    ENDPOINT = FAKE_SUBSCRIPTION.endpoint;
+    AUTH = FAKE_SUBSCRIPTION.getKey('auth')!;
+    P256DH = FAKE_SUBSCRIPTION.getKey('p256dh')!;
+
+    EXAMPLE_TOKEN_DETAILS_DEFAULT_VAPID = {
+      swScope: '/example-scope',
+      vapidKey: DEFAULT_PUBLIC_VAPID_KEY,
+      endpoint: ENDPOINT,
+      auth: AUTH,
+      p256dh: P256DH,
+      fcmSenderId: EXAMPLE_SENDER_ID,
+      fcmToken: 'qwerty1',
+      fcmPushSet: '87654321',
+      createTime: now
+    };
+    EXAMPLE_TOKEN_DETAILS_CUSTOM_VAPID = {
+      swScope: '/example-scope',
+      vapidKey: CUSTOM_VAPID_KEY,
+      endpoint: ENDPOINT,
+      auth: AUTH,
+      p256dh: P256DH,
+      fcmSenderId: EXAMPLE_SENDER_ID,
+      fcmToken: 'qwerty2',
+      fcmPushSet: '7654321',
+      createTime: now
+    };
+    EXAMPLE_EXPIRED_TOKEN_DETAILS = {
+      swScope: '/example-scope',
+      vapidKey: DEFAULT_PUBLIC_VAPID_KEY,
+      endpoint: ENDPOINT,
+      auth: AUTH,
+      p256dh: P256DH,
+      fcmSenderId: EXAMPLE_SENDER_ID,
+      fcmToken: 'qwerty3',
+      fcmPushSet: '654321',
+      createTime: expiredDate
+    };
+
+    const customVAPIDSetup = {
+      name: 'custom',
+      details: EXAMPLE_TOKEN_DETAILS_CUSTOM_VAPID
+    };
+    const defaultVAPIDSetup = {
+      name: 'default',
+      details: EXAMPLE_TOKEN_DETAILS_DEFAULT_VAPID
+    };
+
+    app = makeFakeApp({
+      messagingSenderId: EXAMPLE_SENDER_ID
+    });
+
+    servicesToTest = [WindowController, SWController];
+    vapidSetupToTest = [defaultVAPIDSetup, customVAPIDSetup];
   });
 
-  after(() => {
-    return cleanUp();
+  afterEach(() => {
+    sandbox.restore();
   });
 
   it('should handle a failure to get registration', () => {
